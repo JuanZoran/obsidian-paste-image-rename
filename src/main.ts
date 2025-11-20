@@ -219,6 +219,11 @@ export default class PasteImageRenamePlugin extends Plugin {
 
 	openBatchRenameModal() {
 		const activeFile = this.getActiveFile()
+		if (!activeFile) {
+			new Notice('Batch rename requires an active markdown note.')
+			return
+		}
+
 		const modal = new ImageBatchRenameModal(
 			this.app,
 			activeFile,
@@ -235,6 +240,10 @@ export default class PasteImageRenamePlugin extends Plugin {
 
 	async batchRenameAllImages() {
 		const activeFile = this.getActiveFile()
+		if (!activeFile) {
+			new Notice('Batch rename requires an active markdown note.')
+			return
+		}
 		const fileCache = this.app.metadataCache.getFileCache(activeFile)
 		if (!fileCache || !fileCache.embeds) return
 		const extPatternRegex = /jpe?g|png|gif|tiff|webp/i
@@ -247,7 +256,9 @@ export default class PasteImageRenamePlugin extends Plugin {
 			}
 			// match ext
 			const m0 = extPatternRegex.exec(file.extension)
-			if (!m0) return
+			if (!m0) {
+				continue
+			}
 
 			// rename
 			const { newName, isMeaningful }= this.generateNewName(file, activeFile)
@@ -370,7 +381,13 @@ export default class PasteImageRenamePlugin extends Plugin {
 	testExcludeExtension(file: TFile): boolean {
 		const pattern = this.settings.excludeExtensionPattern
 		if (!pattern) return false
-		return new RegExp(pattern).test(file.extension)
+		try {
+			return new RegExp(pattern).test(file.extension)
+		} catch (err) {
+			console.warn('invalid exclude extension pattern', pattern, err)
+			new Notice('Invalid attachment exclude pattern; processing will skip exclusion.')
+			return false
+		}
 	}
 
 	async loadSettings() {
@@ -553,20 +570,54 @@ class ImageRenameModal extends Modal {
 	}
 }
 
-const imageNamePatternDesc = `
-The pattern indicates how the new name should be generated.
+const imageNamePatternDesc = '该模式决定新名称如何生成，点击右侧按钮查看变量与示例。'
 
-Available variables:
-- {{fileName}}: name of the active file, without ".md" extension.
-- {{dirName}}: name of the directory which contains the document (the root directory of vault results in an empty variable).
-- {{imageNameKey}}: this variable is read from the markdown file's frontmatter, from the same key "imageNameKey".
-- {{DATE:$FORMAT}}: use "$FORMAT" to format the current date, "$FORMAT" must be a Moment.js format string, e.g. {{DATE:YYYY-MM-DD}}.
+const imageNamePatternVariables: { name: string; desc: string }[] = [
+	{ name: '{{fileName}}', desc: '当前文档的名称，不含 ".md"。' },
+	{ name: '{{dirName}}', desc: '当前文档所在目录名称，根目录结果为空。' },
+	{ name: '{{imageNameKey}}', desc: '取自文档 frontmatter 中的 imageNameKey。' },
+	{ name: '{{firstHeading}}', desc: '文档中的第一个一级标题。' },
+	{ name: '{{DATE:$FORMAT}}', desc: '按 Moment.js 格式格式化当前日期，如 {{DATE:YYYY-MM-DD}}。' },
+]
 
-Here are some examples from pattern to image names (repeat in sequence), variables: fileName = "My note", imageNameKey = "foo":
-- {{fileName}}: My note, My note-1, My note-2
-- {{imageNameKey}}: foo, foo-1, foo-2
-- {{imageNameKey}}-{{DATE:YYYYMMDD}}: foo-20220408, foo-20220408-1, foo-20220408-2
-`
+const imageNamePatternExamples: { name: string; desc: string }[] = [
+	{ name: '{{fileName}}', desc: 'My note、My note-1、My note-2 → 以当前文档名为基础。' },
+	{ name: '{{imageNameKey}}', desc: 'foo、foo-1、foo-2 → 使用 frontmatter 中的 key。' },
+	{ name: '{{imageNameKey}}-{{DATE:YYYYMMDD}}', desc: 'foo-20220408、foo-20220408-1、foo-20220408-2 → 加上当天日期。' },
+]
+
+class PatternInfoModal extends Modal {
+	constructor(app: App) {
+		super(app);
+	}
+
+	onOpen() {
+		const { contentEl, titleEl } = this;
+		titleEl.setText('图像名称模式说明');
+
+		contentEl.createEl('p', {
+			text: '该模式决定新图像的最终名称，可通过变量拼接出文档相关的前缀/后缀。',
+		});
+
+		const createSection = (title: string, rows: { name: string; desc: string }[]) => {
+			const section = contentEl.createDiv({ cls: 'pattern-info-section' });
+			section.createEl('strong', { text: title });
+			const list = section.createEl('ul');
+			for (const row of rows) {
+				const item = list.createEl('li');
+				item.createEl('code', { text: row.name });
+				item.createSpan({ text: ` ${row.desc}` });
+			}
+		};
+
+		createSection('可用变量', imageNamePatternVariables);
+		createSection('示例（重复序列）', imageNamePatternExamples);
+	}
+
+	onClose() {
+		this.contentEl.empty();
+	}
+}
 
 class SettingTab extends PluginSettingTab {
 	plugin: PasteImageRenamePlugin;
@@ -580,8 +631,8 @@ class SettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl)
-			.setName('Image name pattern')
+		const patternSetting = new Setting(containerEl)
+			.setName('图像名称模式')
 			.setDesc(imageNamePatternDesc)
 			.setClass('long-description-setting-item')
 			.addText(text => text
@@ -592,10 +643,17 @@ class SettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}
 			));
+		patternSetting.addExtraButton(button => {
+			button
+				.setIcon('info')
+				.setTooltip('查看图像名称模式说明')
+				.onClick(() => new PatternInfoModal(this.app).open())
+			return button
+		})
 
 		new Setting(containerEl)
-			.setName('Duplicate number at start (or end)')
-			.setDesc(`If enabled, duplicate number will be added at the start as prefix for the image name, otherwise it will be added at the end as suffix for the image name.`)
+			.setName('重复编号显示在前/后')
+			.setDesc('启用后编号作为前缀，否则作为后缀。')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.dupNumberAtStart)
 				.onChange(async (value) => {
@@ -605,8 +663,8 @@ class SettingTab extends PluginSettingTab {
 				))
 
 		new Setting(containerEl)
-			.setName('Duplicate number delimiter')
-			.setDesc(`The delimiter to generate the number prefix/suffix for duplicated names. For example, if the value is "-", the suffix will be like "-1", "-2", "-3", and the prefix will be like "1-", "2-", "3-". Only characters that are valid in file names are allowed.`)
+			.setName('重复编号分隔符')
+			.setDesc('指定编号与名称之间的连接符（仅允许文件名合法字符）。')
 			.addText(text => text
 				.setValue(this.plugin.settings.dupNumberDelimiter)
 				.onChange(async (value) => {
@@ -616,8 +674,8 @@ class SettingTab extends PluginSettingTab {
 			));
 
 		new Setting(containerEl)
-			.setName('Always add duplicate number')
-			.setDesc(`If enabled, duplicate number will always be added to the image name. Otherwise, it will only be added when the name is duplicated.`)
+			.setName('总是添加重复编号')
+			.setDesc('即使名称唯一也会附加编号，便于保持统一编号格式。')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.dupNumberAlways)
 				.onChange(async (value) => {
@@ -627,8 +685,8 @@ class SettingTab extends PluginSettingTab {
 				))
 
 		new Setting(containerEl)
-			.setName('Auto rename')
-			.setDesc(`By default, the rename modal will always be shown to confirm before renaming, if this option is set, the image will be auto renamed after pasting.`)
+			.setName('自动重命名')
+			.setDesc('开启后粘贴图片无需确认即可按规则自动命名。')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.autoRename)
 				.onChange(async (value) => {
@@ -638,10 +696,8 @@ class SettingTab extends PluginSettingTab {
 			));
 
 		new Setting(containerEl)
-			.setName('Handle all attachments')
-			.setDesc(`By default, the plugin only handles images that starts with "Pasted image " in name,
-			which is the prefix Obsidian uses to create images from pasted content.
-			If this option is set, the plugin will handle all attachments that are created in the vault.`)
+			.setName('处理所有附件')
+			.setDesc(`默认只处理名称以 "Pasted image " 开头的图像（Obsidian 粘贴生成的前缀），开启后会尝试处理库中创建的所有附件。`)
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.handleAllAttachments)
 				.onChange(async (value) => {
@@ -651,9 +707,8 @@ class SettingTab extends PluginSettingTab {
 			));
 
 		new Setting(containerEl)
-			.setName('Exclude extension pattern')
-			.setDesc(`This option is only useful when "Handle all attachments" is enabled.
-			Write a Regex pattern to exclude certain extensions from being handled. Only the first line will be used.`)
+			.setName('排除扩展名模式')
+			.setDesc('仅在 “处理所有附件” 启用时生效，可输入正则排除特定扩展（只读取第一行）。')
 			.setClass('single-line-textarea')
 			.addTextArea(text => text
 				.setPlaceholder('docx?|xlsx?|pptx?|zip|rar')
@@ -665,9 +720,8 @@ class SettingTab extends PluginSettingTab {
 			));
 
 		new Setting(containerEl)
-			.setName('Disable rename notice')
-			.setDesc(`Turn off this option if you don't want to see the notice when renaming images.
-			Note that Obsidian may display a notice when a link has changed, this option cannot disable that.`)
+			.setName('禁用重命名提示')
+			.setDesc('关闭插件的 Notice 提示，但 Obsidian 在链接变更时仍可能弹出系统级通知。')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.disableRenameNotice)
 				.onChange(async (value) => {

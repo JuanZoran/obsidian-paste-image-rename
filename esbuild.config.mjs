@@ -13,6 +13,17 @@ let runScriptPlugin = {
 			if (result.errors.length > 0) {
 				return
 			}
+
+			const buildMainPath = 'build/main.js'
+			const targetMainPath = 'main.js'
+			if (fs.existsSync(buildMainPath)) {
+				try {
+					fs.copyFileSync(buildMainPath, targetMainPath)
+				} catch (err) {
+					console.error(`failed to copy ${buildMainPath} to ${targetMainPath}`, err)
+				}
+			}
+
 			const scriptName = 'sync-plugin.sh'
 			if (!fs.existsSync(scriptName)) {
 				return
