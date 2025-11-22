@@ -14,13 +14,15 @@ let runScriptPlugin = {
 				return
 			}
 
-			const buildMainPath = 'build/main.js'
-			const targetMainPath = 'main.js'
-			if (fs.existsSync(buildMainPath)) {
+			// Copy manifest.json to build directory
+			const manifestPath = 'manifest.json'
+			const buildManifestPath = 'build/manifest.json'
+			if (fs.existsSync(manifestPath)) {
 				try {
-					fs.copyFileSync(buildMainPath, targetMainPath)
+					fs.copyFileSync(manifestPath, buildManifestPath)
+					console.log(`Copied ${manifestPath} to ${buildManifestPath}`)
 				} catch (err) {
-					console.error(`failed to copy ${buildMainPath} to ${targetMainPath}`, err)
+					console.error(`Failed to copy ${manifestPath} to ${buildManifestPath}`, err)
 				}
 			}
 
